@@ -1,83 +1,329 @@
 ---
 name: codeagent
-description: Execute codeagent-wrapper for multi-backend AI code tasks. Supports Codex, Claude, and Gemini backends with file references (@syntax) and structured output.
+description: Execute codeagent-wrapper for multi-backend AI code tasks. Supports Codex, Claude, Gemini, and OpenCode backends with agent presets, skill injection, file references (@syntax), worktree isolation, parallel execution, and structured output.
 ---
 
 # Codeagent Wrapper Integration
 
 ## Overview
 
-Execute codeagent-wrapper commands with pluggable AI backends (Codex, Claude, Gemini). Supports file references via `@` syntax, parallel task execution with backend selection, and configurable security controls.
+Execute `codeagent-wrapper` commands with pluggable AI backends (Codex, Claude, Gemini, OpenCode), agent presets, auto-detected skill injection, and parallel task orchestration. Supports session resume, git worktree isolation, and structured JSON output.
 
 ## When to Use
 
 - Complex code analysis requiring deep understanding
 - Large-scale refactoring across multiple files
-- Automated code generation with backend selection
+- Multi-agent orchestration (explore → design → implement → review)
+- Automated code generation with backend/agent selection
+- Parallel task execution with dependency management
 
-## Usage
+## Quick Reference
 
-**HEREDOC syntax** (recommended):
-```bash
-codeagent-wrapper --backend codex - [working_dir] <<'EOF'
-<task content here>
-EOF
+```
+codeagent-wrapper [flags] <task|-> [workdir]
+codeagent-wrapper [flags] resume <session_id> <task|-> [workdir]
+codeagent-wrapper --parallel [flags] < tasks_config
 ```
 
-**With backend selection**:
-```bash
-codeagent-wrapper --backend claude - . <<'EOF'
-<task content here>
-EOF
-```
+## CLI Flags
 
-**Simple tasks**:
-```bash
-codeagent-wrapper --backend codex "simple task" [working_dir]
-codeagent-wrapper --backend gemini "simple task" [working_dir]
-```
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--backend <name>` | Backend: codex, claude, gemini, opencode | codex |
+| `--agent <name>` | Agent preset (from models.json or agents/ dir) | none |
+| `--model <name>` | Model override for any backend | backend default |
+| `--skills <names>` | Comma-separated skill names to inject | auto-detected |
+| `--reasoning-effort <level>` | Reasoning level: low, medium, high | backend default |
+| `--prompt-file <path>` | Custom prompt file (restricted to ~/.claude or ~/.codeagent/agents/) | none |
+| `--output <path>` | Write structured JSON output to file | none |
+| `--worktree` | Execute in isolated git worktree (branch: do/{task_id}) | false |
+| `--skip-permissions` | Skip Claude backend permission prompts | false |
+| `--parallel` | Enable parallel task execution from stdin | false |
+| `--full-output` | Include full messages in parallel output (default: summary) | false |
+| `--config <path>` | Config file path | ~/.codeagent/config.* |
+| `--cleanup` | Clean up old logs and exit | — |
+| `-v`, `--version` | Print version and exit | — |
 
 ## Backends
 
-| Backend | Command | Description | Best For |
-|---------|---------|-------------|----------|
-| codex | `--backend codex` | OpenAI Codex (default) | Code analysis, complex development |
-| claude | `--backend claude` | Anthropic Claude | Simple tasks, documentation, prompts |
-| gemini | `--backend gemini` | Google Gemini | UI/UX prototyping |
+| Backend | Flag | Best For |
+|---------|------|----------|
+| **Codex** | `--backend codex` (default) | Deep code analysis, complex logic, algorithm optimization, large-scale refactoring |
+| **Claude** | `--backend claude` | Documentation, prompt engineering, clear-requirement features |
+| **Gemini** | `--backend gemini` | UI/UX prototyping, design system implementation |
+| **OpenCode** | `--backend opencode` | Lightweight tasks, minimal feature set |
 
-### Backend Selection Guide
+## Agent Presets
 
-**Codex** (default):
-- Deep code understanding and complex logic implementation
-- Large-scale refactoring with precise dependency tracking
-- Algorithm optimization and performance tuning
-- Example: "Analyze the call graph of @src/core and refactor the module dependency structure"
+Agent presets bundle backend, model, prompt, and tool control into a reusable name. Use `--agent <name>` to select.
 
-**Claude**:
-- Quick feature implementation with clear requirements
-- Technical documentation, API specs, README generation
-- Professional prompt engineering (e.g., product requirements, design specs)
-- Example: "Generate a comprehensive README for @package.json with installation, usage, and API docs"
+**Sources (checked in order):**
+1. `~/.codeagent/models.json` → `agents.<name>` object
+2. `~/.codeagent/agents/<name>.md` → markdown file becomes the prompt
 
-**Gemini**:
-- UI component scaffolding and layout prototyping
-- Design system implementation with style consistency
-- Interactive element generation with accessibility support
-- Example: "Create a responsive dashboard layout with sidebar navigation and data visualization cards"
+**Agent config fields** (in models.json):
+```json
+{
+  "agents": {
+    "develop": {
+      "backend": "codex",
+      "model": "gpt-4.1",
+      "prompt_file": "~/.codeagent/prompts/develop.md",
+      "reasoning": "high",
+      "yolo": true,
+      "allowed_tools": ["Read", "Write", "Bash"],
+      "disallowed_tools": ["WebFetch"]
+    }
+  }
+}
+```
 
-**Backend Switching**:
-- Start with Codex for analysis, switch to Claude for documentation, then Gemini for UI implementation
-- Use per-task backend selection in parallel mode to optimize for each task's strengths
+**Common agent presets:**
 
-## Parameters
+| Agent | Purpose | Read-Only |
+|-------|---------|-----------|
+| `code-explorer` | Trace code, map architecture, find patterns | Yes |
+| `code-architect` | Design approaches, file plans, build sequences | Yes |
+| `code-reviewer` | Review for bugs, simplicity, conventions | Yes |
+| `develop` | Implement code, run tests, make changes | No |
 
-- `task` (required): Task description, supports `@file` references
-- `working_dir` (optional): Working directory (default: current)
-- `--backend` (required): Select AI backend (codex/claude/gemini)
-  - **Note**: Claude backend only adds `--dangerously-skip-permissions` when explicitly enabled
+## Skill Injection
+
+### Auto-Detection
+
+When `--skills` is not specified, skills are auto-detected from the working directory:
+
+| Detected Files | Injected Skills |
+|---|---|
+| `go.mod` / `go.sum` | `golang-base-practices` |
+| `Cargo.toml` | `rust-best-practices` |
+| `pyproject.toml` / `setup.py` / `requirements.txt` | `python-best-practices` |
+| `package.json` | `vercel-react-best-practices`, `frontend-design` |
+| `vue.config.js` / `vite.config.ts` / `nuxt.config.ts` | `vue-web-app` |
+
+### Manual Override
+
+```bash
+codeagent-wrapper --agent develop --skills golang-base-practices,frontend-design - . <<'EOF'
+Implement full-stack feature...
+EOF
+```
+
+Skills are loaded from `~/.claude/skills/{name}/SKILL.md`, stripped of YAML frontmatter, and injected into the task prompt.
+
+## Usage Patterns
+
+### Single Task (HEREDOC recommended)
+
+```bash
+codeagent-wrapper --backend codex - [workdir] <<'EOF'
+<task content here>
+EOF
+```
+
+### With Agent Preset
+
+```bash
+codeagent-wrapper --agent develop --skills golang-base-practices - . <<'EOF'
+Implement the authentication middleware following existing patterns.
+EOF
+```
+
+### Simple Task (short prompts only)
+
+```bash
+codeagent-wrapper --backend codex "simple task description" [workdir]
+```
+
+**Auto-stdin detection**: When task length exceeds 800 characters or contains special characters (`\n`, `\`, `"`, `'`, `` ` ``, `$`), stdin mode is used automatically. Use `-` to force stdin mode explicitly.
+
+### Resume Session
+
+```bash
+codeagent-wrapper --backend codex resume <session_id> - <<'EOF'
+<follow-up task>
+EOF
+
+# Or with agent preset
+codeagent-wrapper --agent develop resume <session_id> - <<'EOF'
+<follow-up task>
+EOF
+```
+
+### Worktree Isolation
+
+Execute in an isolated git worktree to keep changes separate from the main branch:
+
+```bash
+# Create new worktree automatically (branch: do/{task_id})
+codeagent-wrapper --agent develop --worktree - . <<'EOF'
+Implement feature in isolation...
+EOF
+
+# Reuse existing worktree (set by /do workflow)
+DO_WORKTREE_DIR=/path/to/worktree codeagent-wrapper --agent develop - . <<'EOF'
+Continue work in existing worktree...
+EOF
+```
+
+**Rules:**
+- `DO_WORKTREE_DIR` env var takes precedence over `--worktree`
+- Read-only agents (code-explorer, code-architect, code-reviewer) do NOT need worktree
+- Only `develop` agent needs worktree when making changes
+
+## Parallel Execution
+
+### Task Config Format
+
+```bash
+codeagent-wrapper --parallel <<'EOF'
+---TASK---
+id: <unique_id>
+agent: <agent_name>
+workdir: <path>
+backend: <name>
+model: <model_name>
+reasoning_effort: <low|medium|high>
+skills: <skill1>, <skill2>
+dependencies: <id1>, <id2>
+session_id: <id>
+skip_permissions: true|false
+worktree: true|false
+---CONTENT---
+<task content>
+EOF
+```
+
+**Task header fields** (all optional except `id`):
+
+| Field | Description |
+|-------|-------------|
+| `id` | Unique task identifier (required) |
+| `agent` | Agent preset name |
+| `workdir` | Working directory |
+| `backend` | Override global backend |
+| `model` | Override model |
+| `reasoning_effort` | Reasoning level |
+| `skills` | Comma-separated skill names |
+| `dependencies` | Comma-separated task IDs that must complete first |
+| `session_id` | Resume a previous session |
+| `skip_permissions` | Skip permission prompts (Claude backend) |
+| `worktree` | Execute in git worktree |
+
+### Multi-Agent Orchestration Example
+
+```bash
+codeagent-wrapper --parallel <<'EOF'
+---TASK---
+id: p1_architecture
+agent: code-explorer
+workdir: .
+---CONTENT---
+Map architecture for the authentication subsystem. Return: module map + key files with line numbers.
+
+---TASK---
+id: p1_conventions
+agent: code-explorer
+workdir: .
+---CONTENT---
+Identify testing patterns, conventions, config. Return: test commands + file locations.
+
+---TASK---
+id: p2_design
+agent: code-architect
+workdir: .
+dependencies: p1_architecture, p1_conventions
+---CONTENT---
+Design minimal-change implementation plan based on architecture analysis.
+
+---TASK---
+id: p3_backend
+agent: develop
+workdir: .
+skills: golang-base-practices
+dependencies: p2_design
+---CONTENT---
+Implement backend changes following the design plan.
+
+---TASK---
+id: p3_frontend
+agent: develop
+workdir: .
+skills: vercel-react-best-practices,frontend-design
+dependencies: p2_design
+---CONTENT---
+Implement frontend changes following the design plan.
+
+---TASK---
+id: p4_review
+agent: code-reviewer
+workdir: .
+dependencies: p3_backend, p3_frontend
+---CONTENT---
+Review all changes for correctness, edge cases, and KISS compliance.
+Classify each issue as BLOCKING or MINOR.
+EOF
+```
+
+### Dependency Resolution
+
+- Tasks are topologically sorted (Kahn's algorithm)
+- Circular dependencies are detected and reported
+- Failed parent tasks cause dependent tasks to be skipped
+- Independent tasks at the same level run concurrently
+
+### Output Modes
+
+**Summary (default)**: Structured report per task with extracted fields:
+```
+=== Execution Report ===
+3 tasks | 2 passed | 1 failed
+
+### task_id PASS 92%
+Did: Brief description of work done
+Files: file1.ts, file2.ts
+Tests: 12 passed
+Log: /tmp/codeagent-xxx.log
+
+### task_id FAIL
+Exit code: 1
+Error: Assertion failed
+Detail: Expected status 200 but got 401
+Log: /tmp/codeagent-zzz.log
+```
+
+**Full output** (`--full-output`): Complete task messages included. Use only for debugging specific failures.
+
+### Structured JSON Output
+
+```bash
+codeagent-wrapper --parallel --output results.json <<'EOF'
+...
+EOF
+```
+
+Produces:
+```json
+{
+  "results": [
+    {
+      "task_id": "task_1",
+      "exit_code": 0,
+      "message": "...",
+      "session_id": "...",
+      "coverage": "92%",
+      "files_changed": ["file.ts"],
+      "tests_passed": 12,
+      "log_path": "/tmp/..."
+    }
+  ],
+  "summary": { "total": 3, "success": 2, "failed": 1 }
+}
+```
 
 ## Return Format
 
+Single task output:
 ```
 Agent response text here...
 
@@ -85,133 +331,81 @@ Agent response text here...
 SESSION_ID: 019a7247-ac9d-71f3-89e2-a823dbd8fd14
 ```
 
-## Resume Session
-
-```bash
-# Resume with codex backend
-codeagent-wrapper --backend codex resume <session_id> - <<'EOF'
-<follow-up task>
-EOF
-
-# Resume with specific backend
-codeagent-wrapper --backend claude resume <session_id> - <<'EOF'
-<follow-up task>
-EOF
-```
-
-## Parallel Execution
-
-**Default (summary mode - context-efficient):**
-```bash
-codeagent-wrapper --parallel <<'EOF'
----TASK---
-id: task1
-backend: codex
-workdir: /path/to/dir
----CONTENT---
-task content
----TASK---
-id: task2
-dependencies: task1
----CONTENT---
-dependent task
-EOF
-```
-
-**Full output mode (for debugging):**
-```bash
-codeagent-wrapper --parallel --full-output <<'EOF'
-...
-EOF
-```
-
-**Output Modes:**
-- **Summary (default)**: Structured report with changes, output, verification, and review summary.
-- **Full (`--full-output`)**: Complete task messages. Use only when debugging specific failures.
-
-**With per-task backend**:
-```bash
-codeagent-wrapper --parallel <<'EOF'
----TASK---
-id: task1
-backend: codex
-workdir: /path/to/dir
----CONTENT---
-analyze code structure
----TASK---
-id: task2
-backend: claude
-dependencies: task1
----CONTENT---
-design architecture based on analysis
----TASK---
-id: task3
-backend: gemini
-dependencies: task2
----CONTENT---
-generate implementation code
-EOF
-```
-
-**Concurrency Control**:
-Set `CODEAGENT_MAX_PARALLEL_WORKERS` to limit concurrent tasks (default: unlimited).
-
 ## Environment Variables
 
-- `CODEX_TIMEOUT`: Override timeout in milliseconds (default: 7200000 = 2 hours)
-- `CODEAGENT_SKIP_PERMISSIONS`: Control Claude CLI permission checks
-  - For **Claude** backend: Set to `true`/`1` to add `--dangerously-skip-permissions` (default: disabled)
-  - For **Codex/Gemini** backends: Currently has no effect
-- `CODEAGENT_MAX_PARALLEL_WORKERS`: Limit concurrent tasks in parallel mode (default: unlimited, recommended: 8)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CODEX_TIMEOUT` | Timeout in milliseconds | 7200000 (2 hours) |
+| `CODEAGENT_SKIP_PERMISSIONS` | Skip Claude backend permission prompts (`true`/`false`) | true |
+| `CODEX_BYPASS_SANDBOX` | Control Codex sandbox bypass (`true`/`false`) | true |
+| `CODEAGENT_MAX_PARALLEL_WORKERS` | Max concurrent parallel workers (0=unlimited, max 100) | 0 |
+| `DO_WORKTREE_DIR` | Reuse existing worktree path (set by /do workflow) | none |
+| `CODEAGENT_TMPDIR` | Custom temp directory for executable scripts | system temp |
+| `CODEAGENT_ASCII_MODE` | Use ASCII symbols (PASS/WARN/FAIL) instead of Unicode | false |
+| `CODEAGENT_LOGGER_CLOSE_TIMEOUT_MS` | Logger shutdown timeout in ms | 5000 |
+
+**Config file**: Supports `~/.codeagent/config.(yaml|yml|json|toml)` with the same keys as CLI flags (kebab-case). Env vars use `CODEAGENT_` prefix with underscores.
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | General error (missing args, failed task) |
+| `124` | Timeout |
+| `127` | Backend command not found |
+| `130` | Interrupted (Ctrl+C) |
 
 ## Invocation Pattern
 
 **Single Task**:
 ```
 Bash tool parameters:
-- command: codeagent-wrapper --backend <backend> - [working_dir] <<'EOF'
+- command: codeagent-wrapper --agent <agent> --skills <skills> - [workdir] <<'EOF'
   <task content>
   EOF
 - timeout: 7200000
 - description: <brief description>
-
-Note: --backend is required (codex/claude/gemini)
 ```
 
 **Parallel Tasks**:
 ```
 Bash tool parameters:
-- command: codeagent-wrapper --parallel --backend <backend> <<'EOF'
+- command: codeagent-wrapper --parallel <<'EOF'
   ---TASK---
   id: task_id
-  backend: <backend>  # Optional, overrides global
+  agent: <agent>
   workdir: /path
+  skills: <skill1>, <skill2>
   dependencies: dep1, dep2
   ---CONTENT---
   task content
   EOF
 - timeout: 7200000
 - description: <brief description>
+```
 
-Note: Global --backend is required; per-task backend is optional
+**With Worktree**:
+```
+Bash tool parameters:
+- command: DO_WORKTREE_DIR=<path> codeagent-wrapper --agent develop --skills <skills> - . <<'EOF'
+  <task content>
+  EOF
+- timeout: 7200000
+- description: <brief description>
 ```
 
 ## Critical Rules
 
-**NEVER kill codeagent processes.** Long-running tasks are normal. Instead:
+**NEVER kill codeagent processes.** Long-running tasks (2-10 minutes) are normal. Instead:
 
 1. **Check task status via log file**:
    ```bash
-   # View real-time output
    tail -f /tmp/claude/<workdir>/tasks/<task_id>.output
-
-   # Check if task is still running
-   cat /tmp/claude/<workdir>/tasks/<task_id>.output | tail -50
    ```
 
 2. **Wait with timeout**:
    ```bash
-   # Use TaskOutput tool with block=true and timeout
    TaskOutput(task_id="<id>", block=true, timeout=300000)
    ```
 
@@ -220,17 +414,22 @@ Note: Global --backend is required; per-task backend is optional
    ps aux | grep codeagent-wrapper | grep -v grep
    ```
 
-**Why:** codeagent tasks often take 2-10 minutes. Killing them wastes API costs and loses progress.
+**Why:** Killing wastes API costs and loses progress.
 
-## Security Best Practices
+## Tool Control (Claude Backend)
 
-- **Claude Backend**: Permission checks enabled by default
-  - To skip checks: set `CODEAGENT_SKIP_PERMISSIONS=true` or pass `--skip-permissions`
-- **Concurrency Limits**: Set `CODEAGENT_MAX_PARALLEL_WORKERS` in production to prevent resource exhaustion
-- **Automation Context**: This wrapper is designed for AI-driven automation where permission prompts would block execution
+When using Claude backend with agent presets, control available tools:
 
-## Recent Updates
+```json
+{
+  "agents": {
+    "safe-develop": {
+      "backend": "claude",
+      "allowed_tools": ["Read", "Write", "Bash", "Grep", "Glob"],
+      "disallowed_tools": ["WebFetch", "WebSearch"]
+    }
+  }
+}
+```
 
-- Multi-backend support for all modes (workdir, resume, parallel)
-- Security controls with configurable permission checks
-- Concurrency limits with worker pool and fail-fast cancellation
+Passed as `--allowedTools` and `--disallowedTools` to Claude CLI. Explicit enumeration only (no wildcards).
