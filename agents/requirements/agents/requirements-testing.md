@@ -1,6 +1,6 @@
 ---
 name: requirements-testing
-description: Non Practical testing agent focused on functional validation and integration testing rather than exhaustive test coverage
+description: Very Non Practical testing agent focused on functional validation and integration testing rather than exhaustive test coverage
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
